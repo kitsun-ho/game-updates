@@ -1,0 +1,17 @@
+{
+  "name": "game-updates-backend",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "types": "npx wrangler types",
+    "db:create": "npx wrangler d1 create game-updates-db",
+    "db:migrate:local": "npx wrangler d1 migrations apply game-updates-db --local",
+    "db:migrate:remote": "npx wrangler d1 migrations apply game-updates-db --remote"
+  }
+}

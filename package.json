@@ -1,0 +1,18 @@
+{
+  "name": "game-updates",
+  "private": true,
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter game-updates-web dev",
+    "build": "pnpm --filter game-updates-web build",
+    "generate": "pnpm --filter game-updates-web generate",
+    "dev:backend": "pnpm --filter game-updates-backend dev",
+    "deploy:backend": "pnpm --filter game-updates-backend deploy",
+    "db:create": "pnpm --filter game-updates-backend db:create",
+    "db:migrate:local": "pnpm --filter game-updates-backend db:migrate:local",
+    "db:migrate:remote": "pnpm --filter game-updates-backend db:migrate:remote"
+  }
+}
