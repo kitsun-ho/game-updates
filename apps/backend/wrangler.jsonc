@@ -22,7 +22,7 @@
     {
       "binding": "DB",
       "database_name": "game-updates-db",
-      "database_id": "00000000000000000000000000000000",
+      "database_id": "b024c375-fbd9-488c-8a23-694a811dd552",
       "migrations_dir": "migrations"
     }
   ],
