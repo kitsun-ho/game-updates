@@ -44,6 +44,16 @@ type Source = {
 }
 
 type ApiResponse<T> = { data: T }
+type UpdatesPage = ApiResponse<Update[]> & {
+  meta: {
+    limit: number
+    offset: number
+    hasMore: boolean
+    nextOffset: number | null
+  }
+}
+
+const UPDATE_PAGE_SIZE = 100
 
 const gamePresentation: Record<string, Pick<Game, 'shortName' | 'initials' | 'tone'>> = {
   genshin: { shortName: 'GENSHIN IMPACT', initials: '原', tone: 'gold' },
@@ -56,11 +66,15 @@ const fallbackTones: GameTone[] = ['gold', 'blue', 'rose', 'green']
 const games = ref<Game[]>([])
 const updates = ref<Update[]>([])
 const sources = ref<Source[]>([])
+const hasMoreUpdates = ref(false)
+const nextUpdateOffset = ref<number | null>(null)
 const activeGame = ref('all')
 const searchQuery = ref('')
 const mobileMenuOpen = ref(false)
 const isLoading = ref(true)
+const isLoadingMoreUpdates = ref(false)
 const apiError = ref('')
+const loadMoreError = ref('')
 
 const syncedSourceCount = computed(() => sources.value.filter(source => source.status === 'ok').length)
 const failedSourceCount = computed(() => sources.value.filter(source => source.status === 'error').length)
@@ -123,23 +137,51 @@ function presentGame(game: ApiGame, index: number): Game {
 async function refreshDashboard() {
   isLoading.value = true
   apiError.value = ''
+  loadMoreError.value = ''
+  hasMoreUpdates.value = false
+  nextUpdateOffset.value = null
   const baseUrl = apiBaseUrl()
   const [gameResult, updateResult, sourceResult] = await Promise.allSettled([
     requestApi<ApiResponse<ApiGame[]>>(baseUrl, 'games'),
-    requestApi<ApiResponse<Update[]>>(baseUrl, 'updates?limit=100'),
+    requestApi<UpdatesPage>(baseUrl, `updates?limit=${UPDATE_PAGE_SIZE}`),
     requestApi<ApiResponse<Source[]>>(baseUrl, 'sources'),
   ])
 
   const failures: string[] = []
   if (gameResult.status === 'fulfilled') games.value = gameResult.value.data.map(presentGame)
   else failures.push('遊戲清單')
-  if (updateResult.status === 'fulfilled') updates.value = updateResult.value.data
-  else failures.push('公告列表')
+  if (updateResult.status === 'fulfilled') {
+    updates.value = updateResult.value.data
+    hasMoreUpdates.value = updateResult.value.meta.hasMore && updateResult.value.meta.nextOffset !== null
+    nextUpdateOffset.value = updateResult.value.meta.nextOffset
+  } else failures.push('公告列表')
   if (sourceResult.status === 'fulfilled') sources.value = sourceResult.value.data
   else failures.push('來源狀態')
 
   if (failures.length) apiError.value = `無法載入${failures.join('、')}，請重試。`
   isLoading.value = false
+}
+
+async function loadMoreUpdates() {
+  const offset = nextUpdateOffset.value
+  if (isLoadingMoreUpdates.value || !hasMoreUpdates.value || offset === null) return
+
+  isLoadingMoreUpdates.value = true
+  loadMoreError.value = ''
+  try {
+    const page = await requestApi<UpdatesPage>(
+      apiBaseUrl(),
+      `updates?limit=${UPDATE_PAGE_SIZE}&offset=${offset}`,
+    )
+    const existingIds = new Set(updates.value.map(update => update.id))
+    updates.value.push(...page.data.filter(update => !existingIds.has(update.id)))
+    hasMoreUpdates.value = page.meta.hasMore && page.meta.nextOffset !== null
+    nextUpdateOffset.value = page.meta.nextOffset
+  } catch {
+    loadMoreError.value = '載入更多公告失敗，請重試。'
+  } finally {
+    isLoadingMoreUpdates.value = false
+  }
 }
 
 function gameFor(id: string) {
@@ -382,8 +424,15 @@ function selectGame(id: string) {
             <div v-else class="empty-state">
               <span class="empty-state-symbol">{{ isLoading ? '◌' : apiError ? '!' : '⌕' }}</span>
               <strong>{{ isLoading ? '載入公告中' : apiError ? '公告資料載入失敗' : updates.length ? '沒有符合條件的項目' : '目前尚無公告' }}</strong>
-              <span>{{ isLoading ? '正在讀取資料庫公告。' : apiError ? '請重新載入，或稍後再試。' : updates.length ? '換個關鍵字，或選擇其他遊戲看看。' : '公告會在來源同步成功後顯示。' }}</span>
+              <span>{{ isLoading ? '正在讀取資料庫公告。' : apiError ? '請重新載入，或稍後再試。' : updates.length && hasMoreUpdates ? '目前載入的公告中沒有符合條件的項目，可以載入更多看看。' : updates.length ? '換個關鍵字，或選擇其他遊戲看看。' : '公告會在來源同步成功後顯示。' }}</span>
               <button v-if="apiError" class="feed-retry" type="button" :disabled="isLoading" @click="refreshDashboard">重新載入</button>
+            </div>
+
+            <div v-if="hasMoreUpdates || loadMoreError" class="pagination-controls">
+              <button class="load-more-button" type="button" :disabled="isLoadingMoreUpdates" :aria-busy="isLoadingMoreUpdates" @click="loadMoreUpdates">
+                {{ isLoadingMoreUpdates ? '載入中…' : loadMoreError ? '載入失敗，點擊重試' : '載入更多公告' }}
+              </button>
+              <span v-if="loadMoreError" class="pagination-error" role="status">{{ loadMoreError }}</span>
             </div>
           </section>
 
