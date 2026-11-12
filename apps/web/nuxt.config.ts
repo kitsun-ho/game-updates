@@ -3,6 +3,7 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   css: ['~/assets/css/main.css'],
   app: {
+    baseURL: '/games/',
     head: {
       title: 'PATCH RADAR — 遊戲更新總覽',
       htmlAttrs: { lang: 'zh-Hant' },
