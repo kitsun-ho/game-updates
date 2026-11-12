@@ -12,6 +12,11 @@ dist/
 .env
 .env.*
 !.env.example
+.dev.vars*
+!.dev.vars.example
+
+# Wrangler local cache and simulated resource state
+.wrangler/
 
 # OS and editor files
 .DS_Store

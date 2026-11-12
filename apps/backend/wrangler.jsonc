@@ -18,6 +18,9 @@
   "vars": {
     "CORS_ORIGINS": "http://localhost:3000,https://kitsun.cc,https://www.kitsun.cc"
   },
+  "secrets": {
+    "required": ["SYNC_TOKEN"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

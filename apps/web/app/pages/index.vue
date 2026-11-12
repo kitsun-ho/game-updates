@@ -160,7 +160,13 @@ function sourceStatusLabel(status: Source['status']) {
 }
 
 function categoryLabel(category: string) {
-  const labels: Record<string, string> = { version: '版本資訊', event: '活動資訊', news: '官方消息' }
+  const labels: Record<string, string> = {
+    version: '版本資訊',
+    gacha: '招募資訊',
+    event: '活動資訊',
+    notice: '公告資訊',
+    news: '官方消息',
+  }
   return labels[category] ?? category
 }
 

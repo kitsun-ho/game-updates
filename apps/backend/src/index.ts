@@ -44,6 +44,7 @@ const JSON_HEADERS = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+    const isManualSync = url.pathname === '/api/admin/sync'
 
     if (request.method === 'OPTIONS') {
       const origin = request.headers.get('Origin')
@@ -53,13 +54,23 @@ export default {
       }
       return withCors(request, env, new Response(null, { status: 204 }))
     }
-    if (request.method !== 'GET') {
+
+    if (isManualSync && request.method !== 'POST') {
+      return withCors(request, env, json(
+        { error: { code: 'method_not_allowed', message: 'Use POST to start a manual sync.' } },
+        405,
+        { Allow: 'POST, OPTIONS' },
+      ))
+    }
+    if (!isManualSync && request.method !== 'GET') {
       return withCors(request, env, json({ error: { code: 'method_not_allowed', message: 'Only GET is supported.' } }, 405, { Allow: 'GET, OPTIONS' }))
     }
 
     try {
       let response: Response
-      if (url.pathname === '/api/health') {
+      if (isManualSync) {
+        response = await handleManualSync(request, env)
+      } else if (url.pathname === '/api/health') {
         response = await handleHealth(env)
       } else if (url.pathname === '/api/games') {
         response = await handleGames(env)
@@ -90,6 +101,33 @@ export default {
     }))
   },
 } satisfies ExportedHandler<Env>
+
+async function handleManualSync(request: Request, env: Env): Promise<Response> {
+  const syncToken = (env as Env & { SYNC_TOKEN?: string }).SYNC_TOKEN
+  if (!syncToken) {
+    return json({ error: { code: 'sync_not_configured', message: 'Manual sync is not configured.' } }, 503, { 'Cache-Control': 'no-store' })
+  }
+
+  const authorization = request.headers.get('Authorization') ?? ''
+  const providedToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : ''
+  if (!tokensMatch(providedToken, syncToken)) {
+    return json({ error: { code: 'unauthorized', message: 'A valid bearer token is required.' } }, 401, { 'Cache-Control': 'no-store' })
+  }
+
+  const summary = await collectAllSources(env, Date.now())
+  const status = summary.failures === 0 ? 'success' : summary.successes === 0 ? 'failed' : 'partial'
+  return json({ data: { status, ...summary } }, 200, { 'Cache-Control': 'no-store' })
+}
+
+function tokensMatch(provided: string, expected: string): boolean {
+  const encoder = new TextEncoder()
+  const providedBytes = encoder.encode(provided)
+  const expectedBytes = encoder.encode(expected)
+  const lengthsMatch = providedBytes.byteLength === expectedBytes.byteLength
+  return lengthsMatch
+    ? crypto.subtle.timingSafeEqual(providedBytes, expectedBytes)
+    : !crypto.subtle.timingSafeEqual(providedBytes, providedBytes)
+}
 
 async function handleHealth(env: Env): Promise<Response> {
   await env.DB.prepare('SELECT 1 AS ok').first()

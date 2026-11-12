@@ -35,9 +35,60 @@ type SteamNewsPayload = {
   }
 }
 
+type HoyoverseNewsItem = {
+  iInfoId?: number
+  sTitle?: string
+  sIntro?: string
+  sCategoryName?: string
+  dtCreateTime?: string
+}
+
+type HoyoverseNewsPayload = {
+  retcode?: number
+  message?: string
+  data?: {
+    list?: HoyoverseNewsItem[]
+  }
+}
+
+type KuroNewsItem = {
+  articleId?: number
+  articleTitle?: string
+  articleDesc?: string
+  articleType?: number
+  createTime?: string
+  startTime?: string
+}
+
+type KuroNewsPayload = {
+  article?: KuroNewsItem[]
+  articleType?: Array<{
+    contentId?: number
+    contentLabel?: string
+  }>
+}
+
+type EndfieldBulletin = {
+  cid?: string | number
+  title?: string
+  brief?: string
+  tab?: string
+  displayTime?: number
+}
+
+const GENSHIN_NEWS_API = 'https://sg-public-api-static.hoyoverse.com/content_v2_user/app/a1b1f9d3315447cc/getContentList'
+const WUTHERING_NEWS_JSON = 'https://hw-media-cdn-mingchao.kurogame.com/akiwebsite/website2.0/json/G152/zh-tw/MainMenu.json'
+
+export type CollectionSummary = {
+  triggeredAt: string
+  sourceCount: number
+  successes: number
+  failures: number
+}
+
 const MAX_RESPONSE_BYTES = 1_500_000
 
-export async function collectAllSources(env: Env, scheduledTime: number): Promise<void> {
+export async function collectAllSources(env: Env, triggeredTime: number): Promise<CollectionSummary> {
   const sourceQuery = await env.DB.prepare(
     `SELECT id, source_key, game_id, name, adapter, url, fetch_url
        FROM sources
@@ -45,20 +96,24 @@ export async function collectAllSources(env: Env, scheduledTime: number): Promis
       ORDER BY id`,
   ).all<SourceRecord>()
 
-  const startedAt = new Date(scheduledTime).toISOString()
+  const triggeredAt = new Date(triggeredTime).toISOString()
   const results = await Promise.allSettled(
     sourceQuery.results.map((source) => collectOneSource(env, source)),
   )
 
   const successes = results.filter((result) => result.status === 'fulfilled' && result.value).length
   const failures = results.length - successes
-  console.log(JSON.stringify({
-    message: 'scheduled collection finished',
-    scheduledAt: startedAt,
+  const summary = {
+    triggeredAt,
     sourceCount: results.length,
     successes,
     failures,
+  }
+  console.log(JSON.stringify({
+    message: 'source collection finished',
+    ...summary,
   }))
+  return summary
 }
 
 async function collectOneSource(env: Env, source: SourceRecord): Promise<boolean> {
@@ -149,10 +204,218 @@ async function fetchSourceItems(source: SourceRecord): Promise<NewsItem[]> {
   if (source.adapter === 'steam-news') {
     return fetchSteamNews(source)
   }
+  if (source.source_key === 'genshin-zh-tw') {
+    return fetchGenshinNews(source)
+  }
+  if (source.source_key === 'wuthering-zh-tw') {
+    return fetchWutheringNews(source)
+  }
+  if (source.source_key === 'endfield-zh-tw') {
+    return fetchEndfieldNews(source)
+  }
   if (source.adapter === 'html-news-list') {
     return fetchHtmlNewsList(source)
   }
   throw new Error(`Unsupported adapter: ${String(source.adapter)}`)
+}
+
+async function fetchGenshinNews(source: SourceRecord): Promise<NewsItem[]> {
+  const apiUrl = new URL(GENSHIN_NEWS_API)
+  apiUrl.search = new URLSearchParams({
+    iAppId: '32',
+    iChanId: '395',
+    iPageSize: '40',
+    iPage: '1',
+    sLangKey: 'zh-tw',
+  }).toString()
+
+  const raw = await fetchTextFromUrl(source, apiUrl, 'application/json')
+  const payload = JSON.parse(raw) as HoyoverseNewsPayload
+  if (payload.retcode !== 0) {
+    throw new Error(`HoYoverse news API returned ${payload.retcode ?? 'an unknown error'}: ${payload.message ?? 'no message'}`)
+  }
+
+  const pageUrl = new URL(source.fetch_url)
+  const items = (payload.data?.list ?? []).flatMap((entry): NewsItem[] => {
+    const title = typeof entry.sTitle === 'string' ? entry.sTitle.trim() : ''
+    const id = typeof entry.iInfoId === 'number' && Number.isSafeInteger(entry.iInfoId) && entry.iInfoId > 0
+      ? String(entry.iInfoId)
+      : ''
+    if (!id || title.length < 3) return []
+
+    const canonicalUrl = normalizeUrl(new URL(`${pageUrl.pathname.replace(/\/+$/, '')}/detail/${id}`, pageUrl.origin))
+    return [{
+      externalId: id,
+      title: title.slice(0, 240),
+      summary: cleanSummary(entry.sIntro),
+      category: classifyCategory(`${entry.sCategoryName ?? ''} ${title}`),
+      publishedAt: parseSourceDate(entry.dtCreateTime),
+      sourceUrl: canonicalUrl,
+      canonicalUrl,
+    }]
+  })
+
+  return items.slice(0, 40)
+}
+
+async function fetchWutheringNews(source: SourceRecord): Promise<NewsItem[]> {
+  const feedUrl = new URL(WUTHERING_NEWS_JSON)
+  feedUrl.searchParams.set('t', String(Math.floor(Date.now() / 60_000)))
+  const raw = await fetchTextFromUrl(source, feedUrl, 'application/json')
+  const payload = JSON.parse(raw) as KuroNewsPayload
+  const articleTypes = new Map<number, string>()
+  for (const item of payload.articleType ?? []) {
+    if (typeof item.contentId === 'number' && typeof item.contentLabel === 'string') {
+      articleTypes.set(item.contentId, item.contentLabel)
+    }
+  }
+
+  const byId = new Map<string, KuroNewsItem>()
+  for (const item of payload.article ?? []) {
+    const id = typeof item.articleId === 'number' && Number.isSafeInteger(item.articleId) && item.articleId > 0
+      ? String(item.articleId)
+      : ''
+    const title = typeof item.articleTitle === 'string' ? item.articleTitle.trim() : ''
+    if (!id || title.length < 3) continue
+
+    const previous = byId.get(id)
+    if (!previous || (previous.articleType === 0 && item.articleType !== 0)) byId.set(id, item)
+  }
+
+  const pageUrl = new URL(source.fetch_url)
+  return [...byId.entries()]
+    .sort(([, a], [, b]) => (b.startTime ?? b.createTime ?? '').localeCompare(a.startTime ?? a.createTime ?? ''))
+    .slice(0, 40)
+    .flatMap(([id, item]): NewsItem[] => {
+      const title = item.articleTitle?.trim() ?? ''
+      if (!title) return []
+      const canonicalPath = pageUrl.pathname.replace(/\/news\/?$/, `/news/detail/${id}`)
+      const canonicalUrl = normalizeUrl(new URL(canonicalPath, pageUrl.origin))
+      const typeLabel = articleTypes.get(item.articleType ?? -1) ?? ''
+      return [{
+        externalId: id,
+        title: title.slice(0, 240),
+        summary: cleanSummary(item.articleDesc),
+        category: classifyCategory(`${title} ${typeLabel}`),
+        publishedAt: parseSourceDate(item.startTime ?? item.createTime),
+        sourceUrl: canonicalUrl,
+        canonicalUrl,
+      }]
+    })
+}
+
+async function fetchEndfieldNews(source: SourceRecord): Promise<NewsItem[]> {
+  const html = await fetchText(source, 'text/html,application/xhtml+xml')
+  const bulletins = extractEndfieldBulletins(html)
+  const pageUrl = new URL(source.fetch_url)
+
+  return bulletins
+    .flatMap((item): NewsItem[] => {
+      const id = item.cid === undefined || item.cid === null ? '' : String(item.cid)
+      const title = typeof item.title === 'string' ? item.title.trim() : ''
+      if (!/^\d+$/.test(id) || title.length < 3) return []
+
+      const canonicalUrl = normalizeUrl(new URL(`${pageUrl.pathname.replace(/\/+$/, '')}/${id}`, pageUrl.origin))
+      const publishedAt = typeof item.displayTime === 'number' && Number.isFinite(item.displayTime)
+        ? new Date(item.displayTime * 1000)
+        : null
+      return [{
+        externalId: id,
+        title: title.slice(0, 240),
+        summary: cleanSummary(item.brief),
+        category: classifyCategory(`${item.tab ?? ''} ${title}`),
+        publishedAt: publishedAt && Number.isFinite(publishedAt.getTime()) ? publishedAt.toISOString() : null,
+        sourceUrl: canonicalUrl,
+        canonicalUrl,
+      }]
+    })
+    .slice(0, 40)
+}
+
+function extractEndfieldBulletins(html: string): EndfieldBulletin[] {
+  const chunks = [...html.matchAll(/self\.__next_f\.push\(\[1,("(?:\\.|[^"\\])*")\]\)/g)]
+    .flatMap((match) => {
+      try {
+        const chunk = JSON.parse(match[1] ?? '')
+        return typeof chunk === 'string' ? [chunk] : []
+      } catch {
+        return []
+      }
+    })
+  const flightData = chunks.join('\n')
+  const propertyIndex = flightData.indexOf('"bulletins":')
+  if (propertyIndex < 0) throw new Error('Endfield page did not contain its bulletin data.')
+
+  const arrayStart = flightData.indexOf('[', propertyIndex + '"bulletins":'.length)
+  if (arrayStart < 0) throw new Error('Endfield bulletin data had an invalid format.')
+  const arrayEnd = findJsonContainerEnd(flightData, arrayStart)
+  if (arrayEnd < 0) throw new Error('Endfield bulletin data was incomplete.')
+
+  const parsed: unknown = JSON.parse(flightData.slice(arrayStart, arrayEnd + 1))
+  if (!Array.isArray(parsed)) throw new Error('Endfield bulletin data was not a list.')
+  return parsed as EndfieldBulletin[]
+}
+
+function findJsonContainerEnd(value: string, start: number): number {
+  const opening = value[start]
+  if (opening !== '[' && opening !== '{') return -1
+
+  const closing = opening === '[' ? ']' : '}'
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+
+    if (char === '"') inString = true
+    else if (char === opening) depth += 1
+    else if (char === closing) {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+
+  return -1
+}
+
+function cleanSummary(value: string | null | undefined): string | null {
+  if (!value) return null
+  const summary = stripMarkup(value).slice(0, 500)
+  return summary || null
+}
+
+function parseSourceDate(value: string | null | undefined): string | null {
+  if (!value) return null
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/)
+  if (!match) return null
+
+  const [, year, month, day, hour, minute, second] = match
+  if (!year || !month || !day) return null
+  const yearNumber = Number(year)
+  const monthNumber = Number(month)
+  const dayNumber = Number(day)
+  const hourNumber = Number(hour ?? '00')
+  const minuteNumber = Number(minute ?? '00')
+  const secondNumber = Number(second ?? '00')
+  const localDate = new Date(Date.UTC(yearNumber, monthNumber - 1, dayNumber, hourNumber, minuteNumber, secondNumber))
+  if (
+    localDate.getUTCFullYear() !== yearNumber
+    || localDate.getUTCMonth() !== monthNumber - 1
+    || localDate.getUTCDate() !== dayNumber
+    || localDate.getUTCHours() !== hourNumber
+    || localDate.getUTCMinutes() !== minuteNumber
+    || localDate.getUTCSeconds() !== secondNumber
+  ) return null
+
+  const date = new Date(localDate.getTime() - 8 * 60 * 60 * 1000)
+  return date.toISOString()
 }
 
 async function fetchHtmlNewsList(source: SourceRecord): Promise<NewsItem[]> {
@@ -242,7 +505,10 @@ async function fetchSteamNews(source: SourceRecord): Promise<NewsItem[]> {
 }
 
 async function fetchText(source: SourceRecord, accept: string): Promise<string> {
-  const sourceUrl = new URL(source.fetch_url)
+  return fetchTextFromUrl(source, new URL(source.fetch_url), accept)
+}
+
+async function fetchTextFromUrl(source: SourceRecord, sourceUrl: URL, accept: string): Promise<string> {
   if (!isSafeSourceUrl(sourceUrl)) {
     throw new Error('Source URL must use HTTPS and a public hostname.')
   }
@@ -254,7 +520,11 @@ async function fetchText(source: SourceRecord, accept: string): Promise<string> 
     let response: Response | null = null
     for (let redirects = 0; redirects <= 3; redirects += 1) {
       response = await fetch(requestUrl, {
-        headers: { Accept: accept, 'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.6' },
+        headers: {
+          Accept: accept,
+          'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.6',
+          Referer: source.url,
+        },
         redirect: 'manual',
         signal: controller.signal,
       })
@@ -375,7 +645,7 @@ function parseDateNearAnchor(context: string, anchorIndex: number): string | nul
 }
 
 function classifyCategory(text: string): string {
-  if (/維護|更新|maintenance|patch\s*notes|update\s*(?:notice|details)/i.test(text)) return 'version'
+  if (/維護|更新|maintenance|patch\s*notes|update\s*(?:notice|details)|版本.{0,16}(?:更新|內容|資訊|說明)|(?:更新|維護).{0,12}(?:說明|公告)/i.test(text)) return 'version'
   if (/祈願|尋訪|卡池|招募|headhunting|banner|wish/i.test(text)) return 'gacha'
   if (/活動|event/i.test(text)) return 'event'
   if (/公告|notice/i.test(text)) return 'notice'

@@ -8,6 +8,7 @@ Cloudflare Worker API 與公告同步排程。前端可透過 API 取得遊戲�
 - `GET /api/updates?gameId=genshin&limit=30&offset=0`：公告列表；`gameId` 可省略，`limit` 上限為 100。
 - `GET /api/sources`：公告來源、最近檢查時間、成功同步時間與狀態。
 - `GET /api/health`：Worker 與 D1 的簡易健康檢查。
+- `POST /api/admin/sync`：使用 `SYNC_TOKEN` Bearer token 手動同步所有啟用中的來源，回傳各來源成功與失敗數量。
 
 回應都使用 JSON。公告保留官方文章連結；擷取失敗會更新該來源狀態並記錄在 `sync_runs`，其他來源仍會繼續同步。
 
@@ -24,16 +25,51 @@ Cloudflare Worker API 與公告同步排程。前端可透過 API 取得遊戲�
 
 ```bash
 pnpm install
+cd apps/backend
+printf 'SYNC_TOKEN="%s"\n' "$(openssl rand -hex 32)" > .dev.vars
+chmod 600 .dev.vars
+cd ../..
 pnpm --filter game-updates-backend types
 pnpm db:migrate:local
 pnpm dev:backend
 ```
 
-本機 Worker 預設在 `http://localhost:8787`。可手動觸發本機排程：
+第一次本機開發時建立只供本機使用的 `.dev.vars` secret 檔；該檔已列入 `.gitignore`。Worker 預設在 `http://localhost:8787`。可手動觸發本機排程：
 
 ```bash
 cd apps/backend && npx wrangler dev --test-scheduled
 ```
+
+## 手動觸發正式同步
+
+手動同步 API 需要專用的 Worker secret。首次設定時，先產生一組隨機 token（例如 `openssl rand -hex 32`），把它保存在密碼管理器，再於 backend 目錄設定：
+
+```bash
+cd apps/backend
+npx wrangler secret put SYNC_TOKEN
+```
+
+Wrangler 會安全地提示輸入 token，設定後請從 repo 根目錄部署含手動同步路由的版本：
+
+```bash
+cd ../..
+pnpm deploy:backend
+```
+
+之後可在 macOS zsh 終端機執行以下指令，貼上已保存的 token；token 不會寫進 repo 或 curl 命令列參數：
+
+```zsh
+read -r -s 'SYNC_TOKEN?Enter SYNC_TOKEN: '
+printf '\n'
+curl --config - --fail-with-body --show-error --silent <<EOF
+url = "https://kitsun.cc/api/admin/sync"
+request = "POST"
+header = "Authorization: Bearer ${SYNC_TOKEN}"
+EOF
+unset SYNC_TOKEN
+```
+
+回應會列出觸發時間、來源總數、成功數與失敗數。個別來源的結果可再查 `GET /api/sources`；同步完成後重新整理 `/games`。
 
 ## 建立 Cloudflare D1 與部署
 
