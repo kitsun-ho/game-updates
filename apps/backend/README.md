@@ -41,7 +41,7 @@ cd apps/backend && npx wrangler dev --test-scheduled
 2. 執行 `pnpm db:migrate:remote` 建立資料表與四款遊戲的初始來源設定。
 3. 從 repo 根目錄執行 `pnpm deploy:backend` 部署 Worker。
 
-Cloudflare Workers Builds 若要自動部署，Root directory 設為 `apps/backend`，Build command 使用 `pnpm install`，Deploy command 使用 `pnpm deploy`。排程由 `wrangler.jsonc` 設定為台灣時間每天 09:00 和 21:00（Cloudflare Cron 使用 UTC）。
+Cloudflare Workers Builds 若要自動部署，Root directory 設為 `apps/backend`，Build command 使用 `pnpm install`，Deploy command 使用 `pnpm run deploy`。排程由 `wrangler.jsonc` 設定為台灣時間每天 09:00 和 21:00（Cloudflare Cron 使用 UTC）。
 
 若 API 使用獨立的 `api.kitsun.cc` 網域，請確認 `wrangler.jsonc` 的 `CORS_ORIGINS` 包含網站來源。若改用同源 `/api/*` 路由，則不需要跨來源設定。
 

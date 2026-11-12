@@ -10,7 +10,7 @@
     "build": "pnpm --filter game-updates-web build",
     "generate": "pnpm --filter game-updates-web generate",
     "dev:backend": "pnpm --filter game-updates-backend dev",
-    "deploy:backend": "pnpm --filter game-updates-backend deploy",
+    "deploy:backend": "pnpm --filter game-updates-backend run deploy",
     "db:create": "pnpm --filter game-updates-backend db:create",
     "db:migrate:local": "pnpm --filter game-updates-backend db:migrate:local",
     "db:migrate:remote": "pnpm --filter game-updates-backend db:migrate:remote"
