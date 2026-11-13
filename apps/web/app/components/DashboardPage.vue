@@ -188,13 +188,6 @@ function gameFor(id: string) {
   return games.value.find(game => game.id === id)
 }
 
-function gameSourceClass(id: string) {
-  const statuses = sources.value.filter(source => source.gameId === id).map(source => source.status)
-  if (statuses.includes('error')) return 'game-live-dot-error'
-  if (statuses.includes('ok')) return 'game-live-dot-active'
-  return ''
-}
-
 function sourceStatusLabel(status: Source['status']) {
   if (status === 'ok') return '已同步'
   if (status === 'error') return '需檢查'
@@ -324,7 +317,6 @@ function selectGame(id: string) {
         >
           <span class="game-avatar" aria-hidden="true">{{ game.initials }}</span>
           <span class="game-nav-copy"><strong>{{ game.name }}</strong><small>{{ game.shortName }}</small></span>
-          <span class="game-live-dot" :class="gameSourceClass(game.id)" :aria-label="gameSourceClass(game.id) ? '來源已連接' : '等待首次同步'"></span>
         </button>
       </nav>
 
