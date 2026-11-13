@@ -60,7 +60,7 @@ type UpdatesPage = ApiResponse<Update[]> & {
   }
 }
 
-const UPDATE_PAGE_SIZE = 100
+const UPDATE_PAGE_SIZE = 20
 
 const gamePresentation: Record<string, Pick<Game, 'shortName' | 'initials' | 'tone'>> = {
   genshin: { shortName: 'GENSHIN IMPACT', initials: '原', tone: 'gold' },
@@ -81,6 +81,11 @@ const searchQuery = ref('')
 const mobileMenuOpen = ref(false)
 const sidebarCollapsed = useState('patch-radar-sidebar-collapsed', () => false)
 const isMobileViewport = ref(false)
+const sidebarToggleLabel = computed(() => {
+  if (isMobileViewport.value) return mobileMenuOpen.value ? '關閉導覽選單' : '開啟導覽選單'
+  return sidebarCollapsed.value ? '展開側欄' : '收合側欄'
+})
+const sidebarExpanded = computed(() => isMobileViewport.value ? mobileMenuOpen.value : !sidebarCollapsed.value)
 const isLoading = ref(!dashboardLoaded.value)
 const isLoadingMoreUpdates = ref(false)
 const apiError = useState('patch-radar-api-error', () => '')
@@ -96,14 +101,6 @@ const latestSourceCheck = computed(() => {
   return timestamps[timestamps.length - 1] ?? null
 })
 
-const connectionTitle = computed(() => {
-  if (isLoading.value && !sources.value.length) return '正在連線資料服務'
-  if (apiError.value) return '部分資料載入失敗'
-  if (failedSourceCount.value) return '部分來源同步失敗'
-  if (syncedSourceCount.value) return '官方來源同步正常'
-  return '等待首次公告擷取'
-})
-
 const connectionDetail = computed(() => {
   if (apiError.value) return '可以重新載入資料'
   if (!sources.value.length) return isLoading.value ? '正在讀取來源狀態' : '尚未取得來源資料'
@@ -113,14 +110,6 @@ const connectionDetail = computed(() => {
 const connectionDotClass = computed(() => {
   if (apiError.value || failedSourceCount.value) return 'status-dot-error'
   return syncedSourceCount.value ? 'status-dot-success' : 'status-dot-idle'
-})
-
-const feedNotice = computed(() => {
-  if (isLoading.value) return '正在從 Cloudflare API 讀取公告與來源狀態。'
-  if (apiError.value) return apiError.value
-  if (failedSourceCount.value) return `${failedSourceCount.value} 個來源同步失敗，公告可能尚未更新。`
-  if (!updates.value.length) return '資料庫已連接；公告會在來源同步成功後顯示。'
-  return `已連接資料庫，目前載入 ${updates.value.length} 則公告。`
 })
 
 function apiBaseUrl() {
@@ -299,15 +288,20 @@ function selectGame(id: string) {
     <a class="skip-link" href="#main-content">跳到主要內容</a>
 
     <aside id="primary-sidebar" class="sidebar" :class="{ 'sidebar-open': mobileMenuOpen }" aria-label="主要導覽">
-      <NuxtLink class="brand" to="/" aria-label="Patch Radar 首頁" title="Patch Radar 首頁">
-        <span class="brand-mark" aria-hidden="true">
-          <span></span><span></span><span></span><span></span>
-        </span>
-        <span class="brand-copy">
-          <strong>PATCH RADAR</strong>
-          <small>KITSUN LAB · 01</small>
-        </span>
-      </NuxtLink>
+      <div class="sidebar-header">
+        <NuxtLink class="brand" to="/" aria-label="Patch Radar 首頁" title="Patch Radar 首頁">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </span>
+          <span class="brand-copy">
+            <strong>PATCH RADAR</strong>
+            <small>KITSUN LAB</small>
+          </span>
+        </NuxtLink>
+        <button class="sidebar-toggle" type="button" :aria-label="sidebarToggleLabel" :title="sidebarToggleLabel" :aria-expanded="sidebarExpanded" aria-controls="primary-sidebar" @click="toggleSidebar">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+      </div>
 
       <nav class="primary-nav">
         <NuxtLink class="nav-item" :class="{ 'nav-item-active': !isProjectInfo }" to="/" aria-label="更新總覽" title="更新總覽" :aria-current="!isProjectInfo ? 'page' : undefined" @click="mobileMenuOpen = false">
@@ -342,25 +336,17 @@ function selectGame(id: string) {
       </nav>
     </aside>
 
+    <button v-if="isMobileViewport && !mobileMenuOpen" class="mobile-sidebar-trigger" type="button" :aria-label="sidebarToggleLabel" :title="sidebarToggleLabel" aria-expanded="false" aria-controls="primary-sidebar" @click="toggleSidebar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
     <div v-if="mobileMenuOpen" class="mobile-backdrop" @click="mobileMenuOpen = false"></div>
 
     <main id="main-content" class="main-panel">
-      <header class="topbar">
-        <button class="sidebar-toggle" type="button" :aria-label="isMobileViewport ? (mobileMenuOpen ? '關閉導覽選單' : '開啟導覽選單') : (sidebarCollapsed ? '展開側欄' : '收合側欄')" :aria-expanded="isMobileViewport ? mobileMenuOpen : !sidebarCollapsed" aria-controls="primary-sidebar" @click="toggleSidebar">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-        </button>
-        <div class="breadcrumbs"><strong>{{ isProjectInfo ? '專案資訊' : '更新總覽' }}</strong></div>
-        <div class="topbar-right">
-          <span class="local-time"><span class="time-indicator"></span> TAIPEI · UTC+8</span>
-        </div>
-      </header>
-
       <div class="content-wrap">
         <section class="hero-section" aria-labelledby="page-title">
           <div class="hero-copy">
-            <div class="eyebrow"><span class="eyebrow-line"></span> {{ isProjectInfo ? 'PROJECT OVERVIEW' : 'YOUR GAME UPDATE DESK' }} <span class="eyebrow-index">/ {{ isProjectInfo ? '002' : '001' }}</span></div>
-            <h1 v-if="isProjectInfo" id="page-title">專案資訊<span class="title-period">.</span></h1>
-            <h1 v-else id="page-title">遊戲更新，<br class="mobile-break">集中看就好<span class="title-period">.</span></h1>
+            <h1 v-if="isProjectInfo" id="page-title">專案資訊</h1>
+            <h1 v-else id="page-title">遊戲更新，<br class="mobile-break">集中看就好</h1>
             <p v-if="isProjectInfo">查看追蹤遊戲、公告來源、同步狀態與專案運作方式。</p>
             <p v-else>把你在意的版本、活動與官方公告，收進同一個更新面板。</p>
           </div>
@@ -432,7 +418,7 @@ function selectGame(id: string) {
         <section v-else id="updates" class="updates-view" aria-label="遊戲更新總覽">
           <div class="section-heading-row">
             <div>
-              <h2>更新動態 <span class="heading-count">{{ filteredUpdates.length.toString().padStart(2, '0') }}</span></h2>
+              <h2>更新動態</h2>
             </div>
             <label class="search-box" for="update-search">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.2 4.2"/></svg>
@@ -444,14 +430,6 @@ function selectGame(id: string) {
           <div class="filter-row" role="group" aria-label="篩選遊戲公告">
             <button class="filter-chip" :class="{ 'filter-chip-active': activeGame === 'all' }" :aria-pressed="activeGame === 'all'" type="button" @click="selectGame('all')">全部</button>
             <button v-for="game in games" :key="game.id" class="filter-chip" :class="{ 'filter-chip-active': activeGame === game.id }" :aria-pressed="activeGame === game.id" type="button" @click="selectGame(game.id)">{{ game.name }}</button>
-          </div>
-
-          <div class="demo-notice" :class="{ 'notice-error': apiError || failedSourceCount }" role="status" aria-live="polite">
-            <span class="demo-notice-icon">{{ apiError || failedSourceCount ? '!' : 'i' }}</span>
-            <span>{{ feedNotice }}</span>
-            <NuxtLink v-if="failedSourceCount && !apiError" class="notice-project-link" to="/project-info">查看來源狀態</NuxtLink>
-            <button v-if="apiError" class="feed-retry" type="button" :disabled="isLoading" @click="refreshDashboard">重新載入</button>
-            <span v-else-if="!failedSourceCount" class="demo-notice-line"></span>
           </div>
 
           <div v-if="filteredUpdates.length" class="update-list">
