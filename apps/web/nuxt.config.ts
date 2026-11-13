@@ -14,6 +14,9 @@ export default defineNuxtConfig({
         },
         { name: 'theme-color', content: '#10120f' },
       ],
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/games/favicon.svg' },
+      ],
     },
   },
 })
