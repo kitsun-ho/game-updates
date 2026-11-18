@@ -460,7 +460,7 @@ async function fetchHtmlNewsList(source: SourceRecord): Promise<NewsItem[]> {
       externalId: articleId,
       title,
       summary: null,
-      category: classifyCategory(`${title} ${contextText}`),
+      category: classifyCategory(title),
       publishedAt,
       sourceUrl: canonicalUrl,
       canonicalUrl,
@@ -645,9 +645,11 @@ function parseDateNearAnchor(context: string, anchorIndex: number): string | nul
 }
 
 function classifyCategory(text: string): string {
-  if (/維護|更新|maintenance|patch\s*notes|update\s*(?:notice|details)|版本.{0,16}(?:更新|內容|資訊|說明)|(?:更新|維護).{0,12}(?:說明|公告)/i.test(text)) return 'version'
-  if (/祈願|尋訪|卡池|招募|headhunting|banner|wish/i.test(text)) return 'gacha'
-  if (/活動|event/i.test(text)) return 'event'
-  if (/公告|notice/i.test(text)) return 'notice'
+  const normalized = text.toLocaleLowerCase()
+  if (/維護|维护|維修|维修|停機|停机|停服|伺服器維護|服务器维护|maintenance|server\s+downtime/i.test(normalized)) return 'maintenance'
+  if (/祈願|祈愿|尋訪|寻访|卡池|招募|headhunting|banner|wish/i.test(normalized)) return 'gacha'
+  if (/活動|活动|event/i.test(normalized)) return 'event'
+  if (/版本.{0,16}(?:更新|內容|内容|資訊|信息|說明|说明|前瞻)|(?:更新|patch)\s*(?:內容|内容|資訊|信息|說明|说明|筆記|笔记|notes|details)|patch\s*notes|release\s*notes|version\s*(?:update|notes|details)/i.test(normalized)) return 'version'
+  if (/公告|notice/i.test(normalized)) return 'notice'
   return 'news'
 }

@@ -1,12 +1,15 @@
 <script setup lang="ts">
 const props = defineProps<{ view: 'overview' | 'project-info' }>()
 const isProjectInfo = computed(() => props.view === 'project-info')
+const runtimeConfig = useRuntimeConfig()
 
 useHead(() => ({
   title: props.view === 'project-info' ? '專案資訊 — PATCH RADAR' : 'PATCH RADAR — 遊戲更新總覽',
 }))
 
 type GameTone = 'gold' | 'blue' | 'rose' | 'green'
+type UpdateType = 'all' | 'version' | 'maintenance' | 'event' | 'gacha' | 'other'
+type UpdateCategory = Exclude<UpdateType, 'all'>
 
 type ApiGame = {
   id: string
@@ -69,6 +72,14 @@ const gamePresentation: Record<string, Pick<Game, 'shortName' | 'initials' | 'to
   endfield: { shortName: 'ARKNIGHTS: ENDFIELD', initials: '終', tone: 'green' },
 }
 const fallbackTones: GameTone[] = ['gold', 'blue', 'rose', 'green']
+const updateTypeOptions: Array<{ id: UpdateType; label: string }> = [
+  { id: 'all', label: '全部類型' },
+  { id: 'version', label: '版本更新' },
+  { id: 'maintenance', label: '維護公告' },
+  { id: 'event', label: '活動' },
+  { id: 'gacha', label: '招募' },
+  { id: 'other', label: '其他公告' },
+]
 
 const games = useState<Game[]>('patch-radar-games', () => [])
 const updates = useState<Update[]>('patch-radar-updates', () => [])
@@ -77,6 +88,7 @@ const hasMoreUpdates = useState('patch-radar-has-more-updates', () => false)
 const nextUpdateOffset = useState<number | null>('patch-radar-next-update-offset', () => null)
 const dashboardLoaded = useState('patch-radar-dashboard-loaded', () => false)
 const activeGame = useState('patch-radar-active-game', () => 'all')
+const activeType = useState<UpdateType>('patch-radar-active-type', () => 'all')
 const searchQuery = ref('')
 const mobileMenuOpen = ref(false)
 const sidebarCollapsed = useState('patch-radar-sidebar-collapsed', () => false)
@@ -113,7 +125,11 @@ const connectionDotClass = computed(() => {
 })
 
 function apiBaseUrl() {
-  if (window.location.hostname === 'localhost') return 'http://localhost:8787/api'
+  const configuredBaseUrl = runtimeConfig.public.apiBaseUrl
+  if (typeof configuredBaseUrl === 'string' && configuredBaseUrl.trim()) {
+    return configuredBaseUrl.trim().replace(/\/+$/, '')
+  }
+  if (window.location.hostname === 'localhost') return 'https://kitsun.cc/api'
   return `${window.location.origin}/api`
 }
 
@@ -196,13 +212,19 @@ function sourceStatusLabel(status: Source['status']) {
 
 function categoryLabel(category: string) {
   const labels: Record<string, string> = {
-    version: '版本資訊',
-    gacha: '招募資訊',
-    event: '活動資訊',
-    notice: '公告資訊',
-    news: '官方消息',
+    version: '版本更新',
+    maintenance: '維護公告',
+    gacha: '招募',
+    event: '活動',
+    notice: '其他公告',
+    news: '其他公告',
   }
-  return labels[category] ?? category
+  return labels[category] ?? '其他公告'
+}
+
+function typeForCategory(category: string): UpdateCategory {
+  if (category === 'version' || category === 'maintenance' || category === 'event' || category === 'gacha') return category
+  return 'other'
 }
 
 function formatDate(value: string | null | undefined) {
@@ -264,8 +286,9 @@ const filteredUpdates = computed(() => {
   return updates.value.filter((update) => {
     const game = gameFor(update.gameId)
     const matchesGame = activeGame.value === 'all' || update.gameId === activeGame.value
-    const searchableText = `${game?.name ?? update.gameName} ${game?.shortName ?? ''} ${update.title} ${update.summary ?? ''} ${update.category}`.toLocaleLowerCase()
-    return matchesGame && (!query || searchableText.includes(query))
+    const matchesType = activeType.value === 'all' || typeForCategory(update.category) === activeType.value
+    const searchableText = `${game?.name ?? update.gameName} ${game?.shortName ?? ''} ${update.title} ${update.summary ?? ''} ${categoryLabel(update.category)}`.toLocaleLowerCase()
+    return matchesGame && matchesType && (!query || searchableText.includes(query))
   })
 })
 
@@ -306,10 +329,23 @@ function selectGame(id: string) {
       <div class="side-label games-label">遊戲篩選 <span>{{ games.length.toString().padStart(2, '0') }}</span></div>
       <nav class="game-nav" aria-label="依遊戲篩選">
         <button
+          class="game-nav-item tone-green"
+          :class="{ 'game-nav-active': activeGame === 'all' }"
+          :aria-pressed="activeGame === 'all'"
+          aria-label="全部遊戲更新篩選"
+          title="全部遊戲"
+          type="button"
+          @click="selectGame('all')"
+        >
+          <span class="game-avatar" aria-hidden="true">全</span>
+          <span class="game-nav-copy"><strong>全部遊戲</strong><small>ALL GAMES</small></span>
+        </button>
+        <button
           v-for="game in games"
           :key="game.id"
           class="game-nav-item"
           :class="[`tone-${game.tone}`, { 'game-nav-active': activeGame === game.id }]"
+          :aria-pressed="activeGame === game.id"
           :aria-label="`${game.name}更新篩選`"
           :title="game.name"
           type="button"
@@ -419,9 +455,16 @@ function selectGame(id: string) {
             </label>
           </div>
 
-          <div class="filter-row" role="group" aria-label="篩選遊戲公告">
-            <button class="filter-chip" :class="{ 'filter-chip-active': activeGame === 'all' }" :aria-pressed="activeGame === 'all'" type="button" @click="selectGame('all')">全部</button>
-            <button v-for="game in games" :key="game.id" class="filter-chip" :class="{ 'filter-chip-active': activeGame === game.id }" :aria-pressed="activeGame === game.id" type="button" @click="selectGame(game.id)">{{ game.name }}</button>
+          <div class="filter-row" role="group" aria-label="依公告類型篩選">
+            <button
+              v-for="type in updateTypeOptions"
+              :key="type.id"
+              class="filter-chip"
+              :class="{ 'filter-chip-active': activeType === type.id }"
+              :aria-pressed="activeType === type.id"
+              type="button"
+              @click="activeType = type.id"
+            >{{ type.label }}</button>
           </div>
 
           <div v-if="filteredUpdates.length" class="update-list">
