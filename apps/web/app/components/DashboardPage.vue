@@ -9,7 +9,6 @@ useHead(() => ({
 
 type GameTone = 'gold' | 'blue' | 'rose' | 'green'
 type UpdateType = 'all' | 'version' | 'maintenance' | 'event' | 'gacha' | 'other'
-type UpdateCategory = Exclude<UpdateType, 'all'>
 
 type ApiGame = {
   id: string
@@ -99,9 +98,11 @@ const sidebarToggleLabel = computed(() => {
 })
 const sidebarExpanded = computed(() => isMobileViewport.value ? mobileMenuOpen.value : !sidebarCollapsed.value)
 const isLoading = ref(!dashboardLoaded.value)
+const isLoadingUpdates = ref(false)
 const isLoadingMoreUpdates = ref(false)
 const apiError = useState('patch-radar-api-error', () => '')
 const loadMoreError = ref('')
+let updatesRequestSequence = 0
 
 const syncedSourceCount = computed(() => sources.value.filter(source => source.status === 'ok').length)
 const failedSourceCount = computed(() => sources.value.filter(source => source.status === 'error').length)
@@ -139,6 +140,16 @@ async function requestApi<T>(baseUrl: string, path: string): Promise<T> {
   return await response.json() as T
 }
 
+function updatesPath(offset = 0) {
+  const params = new URLSearchParams({
+    limit: String(UPDATE_PAGE_SIZE),
+    offset: String(offset),
+    type: activeType.value,
+  })
+  if (activeGame.value !== 'all') params.set('gameId', activeGame.value)
+  return `updates?${params.toString()}`
+}
+
 function presentGame(game: ApiGame, index: number): Game {
   const presentation = gamePresentation[game.id]
   return {
@@ -153,29 +164,49 @@ async function refreshDashboard() {
   isLoading.value = true
   apiError.value = ''
   loadMoreError.value = ''
-  hasMoreUpdates.value = false
-  nextUpdateOffset.value = null
   const baseUrl = apiBaseUrl()
-  const [gameResult, updateResult, sourceResult] = await Promise.allSettled([
+  const updateRequest = refreshUpdates()
+  const [gameResult, sourceResult] = await Promise.allSettled([
     requestApi<ApiResponse<ApiGame[]>>(baseUrl, 'games'),
-    requestApi<UpdatesPage>(baseUrl, `updates?limit=${UPDATE_PAGE_SIZE}`),
     requestApi<ApiResponse<Source[]>>(baseUrl, 'sources'),
   ])
 
   const failures: string[] = []
   if (gameResult.status === 'fulfilled') games.value = gameResult.value.data.map(presentGame)
   else failures.push('遊戲清單')
-  if (updateResult.status === 'fulfilled') {
-    updates.value = updateResult.value.data
-    hasMoreUpdates.value = updateResult.value.meta.hasMore && updateResult.value.meta.nextOffset !== null
-    nextUpdateOffset.value = updateResult.value.meta.nextOffset
-  } else failures.push('公告列表')
   if (sourceResult.status === 'fulfilled') sources.value = sourceResult.value.data
   else failures.push('來源狀態')
 
-  if (failures.length) apiError.value = `無法載入${failures.join('、')}，請重試。`
+  await updateRequest
+  if (failures.length) {
+    const otherFailure = `無法載入${failures.join('、')}，請重試。`
+    apiError.value = apiError.value ? `${apiError.value} ${otherFailure}` : otherFailure
+  }
   isLoading.value = false
   dashboardLoaded.value = true
+}
+
+async function refreshUpdates() {
+  const requestId = ++updatesRequestSequence
+  isLoadingUpdates.value = true
+  isLoadingMoreUpdates.value = false
+  apiError.value = ''
+  loadMoreError.value = ''
+  updates.value = []
+  hasMoreUpdates.value = false
+  nextUpdateOffset.value = null
+
+  try {
+    const page = await requestApi<UpdatesPage>(apiBaseUrl(), updatesPath())
+    if (requestId !== updatesRequestSequence) return
+    updates.value = page.data
+    hasMoreUpdates.value = page.meta.hasMore && page.meta.nextOffset !== null
+    nextUpdateOffset.value = page.meta.nextOffset
+  } catch {
+    if (requestId === updatesRequestSequence) apiError.value = '無法載入公告列表，請重試。'
+  } finally {
+    if (requestId === updatesRequestSequence) isLoadingUpdates.value = false
+  }
 }
 
 async function loadMoreUpdates() {
@@ -184,19 +215,18 @@ async function loadMoreUpdates() {
 
   isLoadingMoreUpdates.value = true
   loadMoreError.value = ''
+  const requestId = ++updatesRequestSequence
   try {
-    const page = await requestApi<UpdatesPage>(
-      apiBaseUrl(),
-      `updates?limit=${UPDATE_PAGE_SIZE}&offset=${offset}`,
-    )
+    const page = await requestApi<UpdatesPage>(apiBaseUrl(), updatesPath(offset))
+    if (requestId !== updatesRequestSequence) return
     const existingIds = new Set(updates.value.map(update => update.id))
     updates.value.push(...page.data.filter(update => !existingIds.has(update.id)))
     hasMoreUpdates.value = page.meta.hasMore && page.meta.nextOffset !== null
     nextUpdateOffset.value = page.meta.nextOffset
   } catch {
-    loadMoreError.value = '載入更多公告失敗，請重試。'
+    if (requestId === updatesRequestSequence) loadMoreError.value = '載入更多公告失敗，請重試。'
   } finally {
-    isLoadingMoreUpdates.value = false
+    if (requestId === updatesRequestSequence) isLoadingMoreUpdates.value = false
   }
 }
 
@@ -220,11 +250,6 @@ function categoryLabel(category: string) {
     news: '其他公告',
   }
   return labels[category] ?? '其他公告'
-}
-
-function typeForCategory(category: string): UpdateCategory {
-  if (category === 'version' || category === 'maintenance' || category === 'event' || category === 'gacha') return category
-  return 'other'
 }
 
 function formatDate(value: string | null | undefined) {
@@ -285,17 +310,23 @@ const filteredUpdates = computed(() => {
 
   return updates.value.filter((update) => {
     const game = gameFor(update.gameId)
-    const matchesGame = activeGame.value === 'all' || update.gameId === activeGame.value
-    const matchesType = activeType.value === 'all' || typeForCategory(update.category) === activeType.value
     const searchableText = `${game?.name ?? update.gameName} ${game?.shortName ?? ''} ${update.title} ${update.summary ?? ''} ${categoryLabel(update.category)}`.toLocaleLowerCase()
-    return matchesGame && matchesType && (!query || searchableText.includes(query))
+    return !query || searchableText.includes(query)
   })
 })
 
 function selectGame(id: string) {
+  const changed = activeGame.value !== id
   activeGame.value = id
   mobileMenuOpen.value = false
+  if (changed) void refreshUpdates()
   if (isProjectInfo.value) void navigateTo({ path: '/', hash: '#updates' })
+}
+
+function selectType(type: UpdateType) {
+  if (activeType.value === type) return
+  activeType.value = type
+  void refreshUpdates()
 }
 </script>
 
@@ -463,7 +494,7 @@ function selectGame(id: string) {
               :class="{ 'filter-chip-active': activeType === type.id }"
               :aria-pressed="activeType === type.id"
               type="button"
-              @click="activeType = type.id"
+              @click="selectType(type.id)"
             >{{ type.label }}</button>
           </div>
 
@@ -486,10 +517,10 @@ function selectGame(id: string) {
             </article>
           </div>
           <div v-else class="empty-state">
-            <span class="empty-state-symbol">{{ isLoading ? '◌' : apiError ? '!' : '⌕' }}</span>
-            <strong>{{ isLoading ? '載入公告中' : apiError ? '公告資料載入失敗' : updates.length ? '沒有符合條件的項目' : '目前尚無公告' }}</strong>
-            <span>{{ isLoading ? '正在讀取資料庫公告。' : apiError ? '請重新載入，或稍後再試。' : updates.length && hasMoreUpdates ? '目前載入的公告中沒有符合條件的項目，可以載入更多看看。' : updates.length ? '換個關鍵字，或選擇其他遊戲看看。' : '公告會在來源同步成功後顯示。' }}</span>
-            <button v-if="apiError" class="feed-retry" type="button" :disabled="isLoading" @click="refreshDashboard">重新載入</button>
+            <span class="empty-state-symbol">{{ isLoading || isLoadingUpdates ? '◌' : apiError ? '!' : '⌕' }}</span>
+            <strong>{{ isLoading || isLoadingUpdates ? '載入公告中' : apiError ? '公告資料載入失敗' : updates.length ? '沒有符合條件的項目' : '目前尚無公告' }}</strong>
+            <span>{{ isLoading || isLoadingUpdates ? '正在讀取資料庫公告。' : apiError ? '請重新載入，或稍後再試。' : updates.length && hasMoreUpdates ? '目前載入的公告中沒有符合條件的項目，可以載入更多看看。' : updates.length ? '換個關鍵字，或選擇其他遊戲看看。' : '公告會在來源同步成功後顯示。' }}</span>
+            <button v-if="apiError" class="feed-retry" type="button" :disabled="isLoading || isLoadingUpdates" @click="refreshDashboard">重新載入</button>
           </div>
 
           <div v-if="hasMoreUpdates || loadMoreError" class="pagination-controls">

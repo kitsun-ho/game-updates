@@ -5,7 +5,7 @@ Cloudflare Worker API 與公告同步排程。前端可透過 API 取得遊戲�
 ## API
 
 - `GET /api/games`：啟用中的遊戲清單。
-- `GET /api/updates?gameId=genshin&limit=30&offset=0`：公告列表；`gameId` 可省略，`limit` 上限為 100。
+- `GET /api/updates?gameId=genshin&type=version&limit=30&offset=0`：公告列表；`gameId` 可省略，`type` 支援 `all`、`version`、`maintenance`、`event`、`gacha`、`other`，`limit` 上限為 100。`other` 包含未歸入前四種主要類型的公告。
 - `GET /api/sources`：公告來源、最近檢查時間、成功同步時間與狀態。
 - `GET /api/health`：Worker 與 D1 的簡易健康檢查。
 - `POST /api/admin/sync`：使用 `SYNC_TOKEN` Bearer token 手動同步所有啟用中的來源，回傳各來源成功與失敗數量。

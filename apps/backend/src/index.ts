@@ -146,10 +146,14 @@ async function handleGames(env: Env): Promise<Response> {
 
 async function handleUpdates(url: URL, env: Env): Promise<Response> {
   const gameId = url.searchParams.get('gameId')?.trim() || null
+  const type = url.searchParams.get('type')?.trim().toLowerCase() || 'all'
   const limit = parseInteger(url.searchParams.get('limit'), 30, 1, 100)
   const offset = parseInteger(url.searchParams.get('offset'), 0, 0, 10_000)
   if (limit === null || offset === null) {
     return json({ error: { code: 'invalid_query', message: 'limit must be 1–100 and offset must be 0–10000.' } }, 400)
+  }
+  if (!['all', 'version', 'maintenance', 'event', 'gacha', 'other'].includes(type)) {
+    return json({ error: { code: 'invalid_type', message: 'type must be all, version, maintenance, event, gacha, or other.' } }, 400)
   }
   if (gameId && !/^[a-z0-9-]{1,60}$/.test(gameId)) {
     return json({ error: { code: 'invalid_game_id', message: 'gameId has an invalid format.' } }, 400)
@@ -160,6 +164,12 @@ async function handleUpdates(url: URL, env: Env): Promise<Response> {
   if (gameId) {
     conditions.push('u.game_id = ?')
     bindings.push(gameId)
+  }
+  if (type === 'other') {
+    conditions.push("u.category NOT IN ('version', 'maintenance', 'event', 'gacha')")
+  } else if (type !== 'all') {
+    conditions.push('u.category = ?')
+    bindings.push(type)
   }
 
   const since = url.searchParams.get('since')
